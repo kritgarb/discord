@@ -18,7 +18,7 @@ class Integration(ABC, Generic[T]):
     """Fluxo comum a todas as integrações.
 
     Subclasses definem os metadados (ClassVars) e implementam:
-    fetch, keys, label, to_embed e summary. Podem sobrescrever enrich e bootstrap.
+    fetch, keys, label, to_embed e summary. Podem sobrescrever enrich, bootstrap e skip_reason.
     """
 
     slug: ClassVar[str]          # nome usado na CLI e no arquivo de estado
@@ -69,6 +69,14 @@ class Integration(ABC, Generic[T]):
         """Na primeira execução, itens a marcar como enviados sem postar. Padrão: nenhum (posta tudo)."""
         return ()
 
+    def skip_reason(self, item: T) -> str | None:
+        """Motivo para não postar um item novo (já enriquecido), ou None para postar.
+
+        Itens ignorados são marcados como vistos, pra não serem reavaliados a cada execução.
+        Não se aplica no modo --test.
+        """
+        return None
+
     def webhook(self) -> DiscordWebhook:
         return DiscordWebhook(require_env(self.webhook_env), self.username, self.http)
 
@@ -87,8 +95,16 @@ class Integration(ABC, Generic[T]):
                     self.state.add(self.keys(item))
             selected = [it for it in items if not self.state.contains_any(self.keys(it))]
 
-        self.log(f"[{self.title}] {len(items)} encontrados, {len(selected)} para postar.")
-        return [self.enrich(it) for it in selected]
+        self.log(f"[{self.title}] {len(items)} encontrados, {len(selected)} novos.")
+        to_post = []
+        for item in map(self.enrich, selected):
+            reason = None if test else self.skip_reason(item)
+            if reason:
+                self.state.add(self.keys(item))
+                self.log(f"[{self.title}] Ignorado ({reason}): {self.label(item)}")
+            else:
+                to_post.append(item)
+        return to_post
 
     def run(self, *, dry_run: bool = False, test: int | None = None) -> None:
         """Executa a integração.
@@ -103,6 +119,11 @@ class Integration(ABC, Generic[T]):
                 self.log("")
                 for line in self.summary(item):
                     self.log(line)
+            return
+
+        if not items:
+            if not test:
+                self.state.save()  # pode haver itens ignorados marcados como vistos
             return
 
         webhook = self.webhook()

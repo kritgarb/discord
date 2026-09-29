@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date
 
+from feeds.core import clock
+from feeds.core.clock import BRT
 from feeds.core.http import HttpClient
 from feeds.core.integration import Integration
 from feeds.core.state import SeenStore
 from feeds.integrations.compilado.models import Edition
 from feeds.integrations.compilado.source import CompiladoSite
-
-BRT = timezone(timedelta(hours=-3))  # Brasília, sem horário de verão
 
 
 class Compilado(Integration[Edition]):
@@ -29,7 +29,7 @@ class Compilado(Integration[Edition]):
 
     @staticmethod
     def today() -> date:
-        return datetime.now(BRT).date()
+        return clock.today()
 
     def fetch(self, *, full, limit):
         return self.site.editions()  # a home já lista as últimas 12; não há paginação

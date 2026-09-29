@@ -20,10 +20,11 @@ class FakeIntegration(Integration[str]):
     webhook_env = "FAKE_WEBHOOK"
     SEND_INTERVAL = 0
 
-    def __init__(self, items, state, skip_on_first_run=()):
+    def __init__(self, items, state, skip_on_first_run=(), closed=()):
         super().__init__(http=None, state=state, log=lambda _: None)
         self.items = items
         self.skip_on_first_run = skip_on_first_run
+        self.closed = closed
         self.hook = FakeWebhook()
 
     def fetch(self, *, full, limit):
@@ -43,6 +44,9 @@ class FakeIntegration(Integration[str]):
 
     def bootstrap(self, items):
         return [i for i in items if i in self.skip_on_first_run]
+
+    def skip_reason(self, item):
+        return "encerrado" if item in self.closed else None
 
     def webhook(self):
         return self.hook
@@ -93,6 +97,25 @@ class IntegrationFlowTest(unittest.TestCase):
         integ.run(dry_run=True)
         self.assertEqual(integ.hook.sent, [])
         self.assertFalse(self.path.exists())
+
+    def test_skipped_items_are_not_posted_but_marked_as_seen(self):
+        self.make(["seed"]).run()
+        integ = self.make(["seed", "old", "new"], closed={"old"})
+        integ.run()
+        self.assertEqual(integ.hook.sent, ["new"])
+        self.assertTrue(SeenStore(self.path).contains_any({"old"}))
+
+    def test_skip_reason_is_ignored_in_test_mode(self):
+        integ = self.make(["closed"], closed={"closed"})
+        integ.run(test=1)
+        self.assertEqual(integ.hook.sent, ["closed"])
+
+    def test_state_saved_even_when_everything_is_skipped(self):
+        self.make(["seed"]).run()
+        integ = self.make(["seed", "old"], closed={"old"})
+        integ.hook = None  # não pode tentar enviar
+        integ.run()
+        self.assertTrue(SeenStore(self.path).contains_any({"old"}))
 
     def test_any_matching_key_counts_as_seen(self):
         store = SeenStore(self.path)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import re
+import unicodedata
 from datetime import date
 
 MESES = {
@@ -76,13 +77,27 @@ def find_signup_url(content_html: str) -> str | None:
     return m[1] if m else None
 
 
+EVENT_RE = re.compile(
+    r"(?:"
+    r"levará empreendedor(?:es|as) (?:\w+ )?(?:para o|para a|ao|à|no|na|a)"   # Agência
+    r"|destinad[oa] (?:à participação n[oa]|para o|para a|ao|à|a)"           # Portal
+    r")\s+(.+?)\s*,\s+.+?,?\s+que acontecer",
+    re.IGNORECASE,
+)
+
+
 def extract_event(intro: str) -> str | None:
-    """Nome do evento: 'levará empreendedores ao X, <descrição>, que acontecerá...'."""
-    m = re.search(
-        r"levará empreendedores (?:\w+ )?(?:para o|para a|ao|à|no|na|a)\s+(.+?)\s*,\s+.+?,?\s+que acontecer",
-        intro, re.IGNORECASE,
-    )
+    """Nome do evento: 'levará empreendedores ao X, <descrição>, que acontecerá...'
+    ou 'Missão ... destinada ao X, <descrição>, que acontecerá...'."""
+    m = EVENT_RE.search(intro)
     return m[1].strip() if m else None
+
+
+def title_key(title: str) -> str:
+    """Título normalizado (sem acento, pontuação e caixa) para achar a mesma missão em fontes diferentes."""
+    text = unicodedata.normalize("NFKD", title.lower())
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    return "title:" + " ".join(re.findall(r"[a-z0-9]+", text))
 
 
 def extract_location(text: str) -> str | None:

@@ -63,12 +63,14 @@ feeds/
 │   ├── discord.py               # DiscordWebhook: envio de embeds + tratamento de rate limit
 │   ├── state.py                 # SeenStore: registro do que já foi enviado (JSON)
 │   ├── http.py                  # HttpClient: GET/POST sobre a biblioteca padrão
+│   ├── clock.py                 # "hoje" no horário de Brasília
 │   └── config.py                # .env, variáveis obrigatórias, ConfigError
 └── integrations/
     ├── __init__.py              # INTEGRATIONS: registro slug → classe
     ├── sebrae/
     │   ├── integration.py       # SebraeMissoes(Integration)
-    │   ├── source.py            # SebraeFeed (RSS) e MissionExtractor (página + edital PDF)
+    │   ├── source.py            # SebraeFeed (Agência, RSS), SebraePortal (sitemap + .model.json)
+│   │                        # e MissionExtractor (página + edital PDF)
     │   ├── parsing.py           # funções puras de extração de texto
     │   └── models.py            # Mission (dataclass)
     └── compilado/
@@ -85,16 +87,17 @@ state/                           # o que já foi enviado, por integração (comm
 `Integration.run()` faz o mesmo para todas as integrações:
 
 ```
-fetch()  ──►  já enviado? (SeenStore + keys())  ──►  enrich()  ──►  to_embed()  ──►  DiscordWebhook
+fetch()  ──►  já enviado? (SeenStore + keys())  ──►  enrich()  ──►  skip_reason()?  ──►  to_embed()  ──►  DiscordWebhook
                     ▲                                                                      │
                     └──────────────────────── state.save() ◄───────────────────────────────┘
 ```
 
 1. **`fetch(full, limit)`**: busca os itens, do mais antigo para o mais novo. `full=True` pede uma busca mais profunda (primeira execução ou `--test`).
 2. **Filtra** os itens cujas **`keys()`** já estão no estado. Na primeira execução, os itens devolvidos por **`bootstrap()`** são marcados como enviados sem postar.
-3. **`enrich(item)`**: busca detalhes. Só roda para os itens que vão ser enviados.
-4. **`to_embed(item)`**: monta o card, que é enviado pelo `DiscordWebhook`.
-5. **Salva o estado**, mesmo se o envio falhar no meio, para não repetir o que já foi.
+3. **`enrich(item)`**: busca detalhes. Só roda para os itens novos.
+4. **`skip_reason(item)`**: se devolver um motivo, o item não é postado, mas é marcado como visto para não ser reavaliado a cada execução (ex.: missão com inscrições encerradas). Não se aplica no `--test`.
+5. **`to_embed(item)`**: monta o card, que é enviado pelo `DiscordWebhook`.
+6. **Salva o estado**, mesmo se o envio falhar no meio, para não repetir o que já foi.
 
 ### Adicionando uma integração
 
@@ -112,7 +115,7 @@ fetch()  ──►  já enviado? (SeenStore + keys())  ──►  enrich()  ─�
        def label(self, item): ...             # texto curto para logs
        def to_embed(self, item): ...          # embed do Discord
        def summary(self, item): ...           # linhas do --dry-run
-       # opcionais: enrich(item), bootstrap(items)
+       # opcionais: enrich(item), bootstrap(items), skip_reason(item)
    ```
 
 2. Registre a classe em `feeds/integrations/__init__.py` (`INTEGRATIONS`).
@@ -122,7 +125,12 @@ fetch()  ──►  já enviado? (SeenStore + keys())  ──►  enrich()  ─�
 
 ## Missões Sebrae/SE
 
-Acompanha as **missões empresariais** publicadas na [Agência Sebrae de Notícias (SE)](https://se.agenciasebrae.com.br/) e posta cada missão nova com as informações principais:
+Acompanha as **missões empresariais do Sebrae/SE** e posta cada missão nova **com inscrições abertas**. As missões saem em dois lugares, e a integração lê os dois:
+
+- [Agência Sebrae de Notícias (SE)](https://se.agenciasebrae.com.br/): notícias, com feed RSS;
+- [Portal Sebrae](https://sebrae.com.br/se): páginas em `sebrae.com.br/se/subsites/…`, sem RSS. Hoje a maioria das missões sai só aqui.
+
+Cada card traz as informações principais:
 
 | Campo | Exemplo |
 |---|---|
@@ -132,33 +140,38 @@ Acompanha as **missões empresariais** publicadas na [Agência Sebrae de Notíci
 | 💰 Valor (participante) | ≈ R$ 2.500,00 |
 | ⏰ Inscrições até | 30/06/2026 |
 
-O card também traz links para a notícia, o edital e o formulário de inscrição.
+O card também traz links para a notícia/página, o edital e o formulário de inscrição.
 
 ### Como funciona
 
-1. **Busca**: o `SebraeFeed` lê o feed principal `https://se.agenciasebrae.com.br/feed/`, com 3 páginas (≈ 30 posts) por execução e até 30 páginas na primeira execução.
-2. **Filtra**: mantém só posts cujo título contém *missão/missões*.
-3. **Deduplica** pelo `guid` do RSS (`?p=ID`) **e** pelo link: se qualquer um já estiver no estado, a missão não é reenviada.
+1. **Busca** nas duas fontes:
+   - **Agência** (`SebraeFeed`): feed principal `https://se.agenciasebrae.com.br/feed/`, com 3 páginas (≈ 30 posts) por execução e até 30 na primeira execução.
+   - **Portal** (`SebraePortal`): lê o `sitemap.xml` do portal, pega as páginas `sebrae.com.br/se/subsites/…` com *miss* na URL e baixa o `.model.json` de cada uma (conteúdo estruturado do Adobe AEM). Páginas já vistas não são baixadas de novo.
+2. **Filtra**: mantém só itens cujo título contém *missão/missões*.
+3. **Deduplica** pelo `guid`, pelo link **e** pelo título normalizado (sem acento, pontuação e caixa). Se qualquer um já estiver no estado, a missão não é reenviada, mesmo que apareça na outra fonte.
 4. **Extrai** os detalhes (`MissionExtractor`):
 
    | Campo | Fonte |
    |---|---|
-   | Evento, local, data | 1º parágrafo da notícia (*"levará empreendedores à X, …, que acontecerá na cidade de Y, no período de Z"*); se faltar, preâmbulo do edital |
+   | Evento, local, data | 1º parágrafo do texto (*"levará empreendedores à X, …"* na Agência, *"Missão … destinada ao X, …"* no Portal, seguido de *"que acontecerá na cidade de Y, no período de Z"*); se faltar, preâmbulo do edital |
    | Valor | item 10.1 do edital (*"O valor a ser pago pelo participante… R$ X"*) |
-   | Prazo de inscrição | a **data mais recente** entre: período de inscrição da notícia, prorrogações (*"prorrogado até…"*) e item 8.3 do edital mais novo (erratas) |
+   | Prazo de inscrição | a **data mais recente** entre: período de inscrição do texto, descrição (*"inscreva-se até…"*), prorrogações (*"prorrogado até…"*) e item 8.3 do edital mais novo (erratas) |
    | Edital | último link de PDF com "edital" no post (erratas vêm depois do original) |
-   | Inscrição | link `forms.office.com` do post |
+   | Inscrição | link de formulário (`forms.office.com`, `forms.cloud.microsoft`) |
 
-5. **Posta** um card por missão, da mais antiga para a mais nova. Na primeira execução, posta todas as missões existentes.
+5. **Ignora missões com inscrições encerradas** (prazo anterior a hoje, no horário de Brasília): elas são marcadas como vistas sem postar. Missão sem prazo identificado é postada.
+6. **Posta** um card por missão aberta, da mais antiga para a mais nova.
 
 Campos que não forem encontrados são omitidos. Se quase nada for encontrado (ex.: notícia fora do modelo padrão), o card mostra o resumo da notícia.
 
 ### Limitações conhecidas
 
-- **Não usamos a busca do site** (`?s=missão`): o índice dela está desatualizado e deixa missões de fora. O feed principal é completo.
+- **A Agência não publica todas as missões.** Em setembro/2026, das 9 missões do Sebrae/SE no Portal, só 1 tinha saído na Agência. Por isso o Portal é a fonte principal.
+- **O Portal não tem data de publicação**: usamos a data da última modificação da página (`lastModifiedDate`).
+- **Não usamos a busca da Agência** (`?s=missão`): o índice dela está desatualizado e deixa missões de fora. O feed principal é completo.
 - **O conteúdo do RSS pode estar desatualizado** (ex.: sem as prorrogações/erratas mais recentes). Por isso os detalhes são lidos direto da página da notícia.
 - **O valor é aproximado**: é o que consta no edital, que avisa que pode mudar na contratação.
-- **A extração depende do padrão de texto** das notícias e editais do Sebrae/SE. Se o modelo mudar, algum campo pode deixar de aparecer, e o post é enviado com o que foi encontrado. Use `--test N --dry-run` para conferir.
+- **A extração depende do padrão de texto** das páginas e editais do Sebrae/SE, e reproduz erros do site (ex.: a página da Fenalaw 2026 diz "São Paulo (PE)"). Se o modelo mudar, algum campo pode deixar de aparecer, e o post é enviado com o que foi encontrado. Use `--test N --dry-run` para conferir.
 - Se o edital estiver fora do ar ou ilegível, o card sai sem valor, e o aviso aparece no log.
 
 ---

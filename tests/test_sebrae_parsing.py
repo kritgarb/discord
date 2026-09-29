@@ -22,7 +22,30 @@ WSR_INTRO = (
 )
 
 
+PORTAL_INTRO = (
+    "O Sebrae Sergipe está com inscrições abertas para a participação de empreendedores na Missão realizada "
+    "pelo Sebrae/SE destinada ao REC'n PLAY 2026 , maior festival gratuito de inovação, tecnologia, criatividade "
+    "e cultura do Brasil, que acontecerá na cidade de Recife (PE), no período de 11 a 14 de novembro de 2026."
+)
+OMNI_INTRO = (
+    "O Sebrae Sergipe está com inscrições abertas para uma missão empresarial destinada à participação no "
+    "OMNIVAREJO 2026, 58ª Convenção Nacional do Comércio Lojista que acontecerá na cidade de João Pessoa/PB, "
+    "no período de 27 a 29 de agosto de 2026."
+)
+
+
 class EventTest(unittest.TestCase):
+    def test_event_name_portal_format(self):
+        self.assertEqual(parsing.extract_event(PORTAL_INTRO), "REC'n PLAY 2026")
+        self.assertEqual(parsing.extract_event(OMNI_INTRO), "OMNIVAREJO 2026")
+        self.assertEqual(parsing.extract_location(PORTAL_INTRO), "Recife/PE")
+
+    def test_title_key_matches_across_sources(self):
+        self.assertEqual(
+            parsing.title_key("Participe da missão do Sebrae/SE para a Deep Tech Summit 2026"),
+            parsing.title_key("Participe da Missão do Sebrae/SE  para a DEEP TECH Summit 2026"),
+        )
+
     def test_event_name(self):
         self.assertEqual(parsing.extract_event(NEON_INTRO), "Nordeste On 2026 – NEON 2026")
         self.assertEqual(parsing.extract_event(WSR_INTRO), "Web Summit Rio 26")

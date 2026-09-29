@@ -1,19 +1,23 @@
-"""Acesso ao site da Agência Sebrae de Notícias (SE): feed RSS, páginas e editais."""
+"""Fontes das missões do Sebrae/SE (Agência de Notícias e Portal Sebrae) e leitura dos editais."""
 
 from __future__ import annotations
 
+import html
 import io
+import json
 import re
 import sys
 import urllib.error
+import urllib.parse
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
 from pypdf import PdfReader
 
 from feeds.core.http import HttpClient
 from feeds.integrations.sebrae import parsing
-from feeds.integrations.sebrae.models import Mission
+from feeds.integrations.sebrae.models import PORTAL, Mission
 
 NS = {
     "media": "http://search.yahoo.com/mrss/",
@@ -55,6 +59,74 @@ class SebraeFeed:
         )
 
 
+def parse_portal_model(data: dict, url: str, base_url: str = "https://sebrae.com.br") -> Mission:
+    """Monta a Mission a partir do .model.json de uma página do Portal Sebrae (Adobe AEM).
+
+    O conteúdo fica na árvore ':items' do 'responsivegrid': componentes de texto (HTML) e
+    botões/ações com links (edital em PDF, formulário). Os links viram <a> no content_html
+    para o MissionExtractor tratar igual a uma notícia da Agência.
+    """
+    grid = data.get(":items", {}).get("root", {}).get(":items", {}).get("responsivegrid", {})
+    texts: list[str] = []
+    links: list[tuple[str, str]] = []
+
+    def absolute(href: str) -> str:
+        return urllib.parse.urljoin(base_url, urllib.parse.quote(href, safe="/%:?=&#"))
+
+    def walk(node):
+        if isinstance(node, dict):
+            if isinstance(node.get("link"), str):                    # botão
+                links.append((absolute(node["link"]), node.get("text") or ""))
+            elif isinstance(node.get("url"), str) and "title" in node:  # ação de teaser
+                links.append((absolute(node["url"]), node.get("title") or ""))
+            elif isinstance(node.get("text"), str) and "<" in node["text"]:  # componente de texto (HTML)
+                texts.append(node["text"])
+            for value in node.values():
+                if isinstance(value, (dict, list)):
+                    walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(grid)
+    content_html = "".join(texts) + "".join(
+        f'<p><a href="{html.escape(href)}">{html.escape(label)}</a></p>' for href, label in links
+    )
+    modified = data.get("lastModifiedDate")
+    published = (datetime.fromtimestamp(modified / 1000, tz=timezone.utc) if modified
+                 else datetime.now(timezone.utc))
+    return Mission(
+        guid=url,
+        title=parsing.clean_text(data.get("title")),
+        link=url,
+        description=parsing.clean_text(data.get("description")),
+        content_html=content_html,
+        published=published,
+        source=PORTAL,
+    )
+
+
+class SebraePortal:
+    """Portal Sebrae (sebrae.com.br), onde o Sebrae/SE também publica missões.
+
+    Não tem RSS: as páginas de missão vêm do sitemap e o conteúdo, do .model.json de cada uma.
+    """
+
+    BASE_URL = "https://sebrae.com.br"
+    SITEMAP_URL = BASE_URL + "/sitemap.xml"
+    MISSION_URL_RE = re.compile(r"^https://sebrae\.com\.br/se/subsites/.*miss", re.IGNORECASE)
+
+    def __init__(self, http: HttpClient):
+        self.http = http
+
+    def mission_urls(self) -> list[str]:
+        sitemap = self.http.get_text(self.SITEMAP_URL)
+        return [u for u in re.findall(r"<loc>\s*([^<\s]+)\s*</loc>", sitemap) if self.MISSION_URL_RE.match(u)]
+
+    def mission(self, url: str) -> Mission:
+        return parse_portal_model(json.loads(self.http.get(url + ".model.json")), url, self.BASE_URL)
+
+
 class MissionExtractor:
     """Preenche os detalhes de uma missão a partir da página da notícia e do edital em PDF."""
 
@@ -75,7 +147,9 @@ class MissionExtractor:
         return re.sub(r"\s+", " ", " ".join(p.extract_text() or "" for p in reader.pages))
 
     def extract(self, mission: Mission) -> Mission:
-        content_html = self.article_html(mission.link) or mission.content_html
+        content_html = mission.content_html
+        if mission.source != PORTAL:  # o portal já vem completo do .model.json
+            content_html = self.article_html(mission.link) or content_html
         body = parsing.clean_text(content_html)
         intro = parsing.first_paragraph(content_html)
 

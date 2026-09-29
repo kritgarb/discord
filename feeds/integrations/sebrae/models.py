@@ -4,9 +4,13 @@ from dataclasses import dataclass
 from datetime import date, datetime
 
 
+AGENCIA = "agencia"  # Agência Sebrae de Notícias (feed RSS)
+PORTAL = "portal"    # Portal Sebrae (sebrae.com.br/se/subsites/...)
+
+
 @dataclass
 class Mission:
-    """Post de missão empresarial do feed; os detalhes são preenchidos pelo MissionExtractor."""
+    """Missão empresarial encontrada numa das fontes; os detalhes são preenchidos pelo MissionExtractor."""
 
     guid: str
     title: str
@@ -15,6 +19,7 @@ class Mission:
     content_html: str
     published: datetime
     image: str | None = None
+    source: str = AGENCIA
 
     # detalhes extraídos da notícia e do edital
     event: str | None = None

@@ -317,7 +317,8 @@ def main():
     if args.test:
         new = missions[-args.test:]
     else:
-        new = [it for it in missions if it["guid"] not in posted]
+        # guid (?p=ID) e link são guardados: qualquer um dos dois já identifica como enviado
+        new = [it for it in missions if not {it["guid"], it["link"]} & posted]
     print(f"{len(missions)} missões encontradas, {len(new)} para postar.")
 
     for it in new:
@@ -337,7 +338,7 @@ def main():
     try:
         for it in new:
             post_to_discord(webhook_url, it)
-            posted.add(it["guid"])
+            posted.update({it["guid"], it["link"]})
             print(f"Postado: {it['title']}")
             time.sleep(1)
     finally:

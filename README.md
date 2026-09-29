@@ -1,10 +1,17 @@
 # Feeds → Discord
 
-Integrações que rodam de hora em hora no GitHub Actions, buscam conteúdo na web e publicam no Discord, cada uma no seu canal (webhook próprio):
+Automação de Discord em duas partes:
+
+- **Feeds** (`feeds/`): integrações que rodam de hora em hora no GitHub Actions, buscam conteúdo na web e publicam via webhook.
+- **[Bot de ponto](#bot-de-ponto)** (`ponto/`): bot que fica no ar numa VPS e contabiliza as horas dos freelas com `/entrar` e `/sair`.
+
+### Feeds
+
+Cada integração publica no seu canal (webhook próprio):
 
 | Integração | Fonte | Comando | Webhook (variável) |
 |---|---|---|---|
-| [Missões Sebrae/SE](#missões-sebraese) | Agência Sebrae de Notícias (SE) | `python -m feeds missoes` | `DISCORD_WEBHOOK_URL` |
+| [Missões Sebrae/SE](#missões-sebraese) | Agência Sebrae de Notícias e Portal Sebrae (SE) | `python -m feeds missoes` | `DISCORD_WEBHOOK_URL` |
 | [Compilado do Código Fonte TV](#compilado-do-código-fonte-tv) | compilado.codigofonte.com.br | `python -m feeds compilado` | `DISCORD_WEBHOOK_COMPILADO_URL` |
 
 Todas **só postam o que ainda não foi enviado**: cada integração guarda o que já mandou em `state/<integração>.json`.
@@ -77,9 +84,11 @@ feeds/
         ├── integration.py       # Compilado(Integration)
         ├── source.py            # CompiladoSite + parse_home (JSON __NEXT_DATA__)
         └── models.py            # Edition (dataclass)
+ponto/                           # bot de relógio de ponto (ver "Bot de ponto")
 tests/                           # unittest, sem acesso à rede
 state/                           # o que já foi enviado, por integração (commitado pelo workflow)
 .github/workflows/feeds.yml      # cron de hora em hora
+Dockerfile, docker-compose.yml   # deploy do bot de ponto na VPS
 ```
 
 ### Fluxo da classe base
@@ -209,7 +218,95 @@ As edições não saem num dia fixo da semana, e às vezes várias saem juntas. 
 
 ---
 
-## Setup (GitHub Actions)
+## Bot de ponto
+
+Bot do Discord que funciona como relógio de ponto para os freelas: cada um abre e fecha o próprio ponto, e o bot soma as horas. As respostas dos freelas são **privadas** (só quem usou o comando vê). Os comandos de admin só aparecem para quem tem a permissão **Gerenciar servidor**.
+
+### Comandos
+
+| Comando | Quem | O que faz |
+|---|---|---|
+| `/entrar [nota]` | freela | Abre o ponto (a nota é opcional: no que vai trabalhar) |
+| `/pausa` | freela | Pausa o ponto; o tempo em pausa não conta |
+| `/retomar` | freela | Volta da pausa |
+| `/sair` | freela | Fecha o ponto e mostra o tempo da sessão e o total do mês |
+| `/status` | freela | Mostra se o ponto está aberto e quanto já trabalhou |
+| `/horas [periodo]` | freela | Suas sessões e o total no período (padrão: este mês) |
+| `/ponto-admin relatorio [periodo] [freela]` | admin | Horas por pessoa no período + **CSV** (abre no Excel/Sheets) |
+| `/ponto-admin ajustar <freela> <duracao> <motivo>` | admin | Soma ou subtrai horas: `1h30`, `45m`, `-0h15` |
+| `/ponto-admin fechar <freela> [horario]` | admin | Fecha o ponto de quem esqueceu, no horário informado (`18:30`) |
+| `/ponto-admin abertos` | admin | Quem está com o ponto aberto agora |
+
+Períodos: hoje, esta semana, semana passada, este mês e mês passado (semanas começam na segunda; horário de Brasília).
+
+### Regras
+
+- Cada pessoa tem no máximo **um ponto aberto** por servidor.
+- Uma sessão conta no período **em que começou** (entrou 23:00 do dia 30 e saiu 01:00 do dia 1º: conta no dia 30).
+- Só sessões **encerradas** entram nos totais; ajustes entram pela data em que foram feitos.
+- **Lembrete**: quem fica com o ponto aberto mais de `PONTO_LEMBRETE_HORAS` (padrão 8h) de trabalho recebe **uma** DM lembrando de sair. Se já tiver passado da hora, um admin fecha com `/ponto-admin fechar` no horário certo.
+
+### Arquitetura
+
+```
+ponto/
+├── __main__.py        # python -m ponto
+├── config.py          # Settings (variáveis de ambiente / .env)
+├── models.py          # Session, Adjustment, UserTotal (dataclasses)
+├── repository.py      # SQLiteRepository: persistência (SQLite)
+├── service.py         # TimeClock: regras do ponto; não depende do Discord
+├── timeutil.py        # períodos, durações (1h30) e horários (18:30)
+└── bot/
+    ├── client.py      # PontoBot: registra os comandos e roda o lembrete (a cada 10 min)
+    ├── freela.py      # FreelaCog: /entrar, /pausa, /retomar, /sair, /status, /horas
+    ├── admin.py       # AdminCog: /ponto-admin ...
+    └── ui.py          # escolhas de período e tratamento de erros
+```
+
+As regras ficam no `TimeClock`, que recebe o repositório e um relógio injetáveis. Os testes (`tests/test_ponto.py`) usam SQLite em memória e um relógio falso, sem Discord.
+
+### Criando o bot no Discord
+
+1. [Developer Portal](https://discord.com/developers/applications) → sua aplicação → **Bot**:
+   - **Reset Token** e guarde o token (vai no `.env` da VPS; **nunca** no git ou em chat).
+   - Desligue **Public Bot**, para só você poder adicioná-lo a servidores.
+   - Nenhum *Privileged Gateway Intent* é necessário.
+2. Convide o bot para o servidor com este link (troque o `client_id` se usar outra aplicação):
+
+   ```
+   https://discord.com/oauth2/authorize?client_id=1554606589636255845&scope=bot+applications.commands&permissions=0
+   ```
+
+   `permissions=0` porque o bot só responde a comandos e manda DMs.
+3. Copie o ID do servidor (Configurações → Avançado → **Modo desenvolvedor**; depois clique com o botão direito no servidor → **Copiar ID**) para `PONTO_GUILD_ID`. Com ele, os comandos aparecem na hora.
+
+### Deploy na VPS (Docker)
+
+Na VPS, com Docker e o plugin Compose instalados:
+
+```bash
+git clone https://github.com/kritgarb/discord.git && cd discord
+cp .env.example .env    # preencha PONTO_BOT_TOKEN e PONTO_GUILD_ID
+docker compose up -d --build
+docker compose logs -f ponto    # deve aparecer "comandos sincronizados" e "Conectado como ..."
+```
+
+- **Atualizar**: `git pull && docker compose up -d --build`.
+- **Dados**: o banco fica no volume `ponto-data` (`/data/ponto.db` dentro do container) e sobrevive a rebuilds.
+- **Backup**: `docker compose cp ponto:/data/ponto.db ./ponto-backup.db`.
+
+Para rodar sem Docker: `pip install -r requirements-bot.txt` e `python -m ponto` (o banco fica em `data/ponto.db`).
+
+| Variável | Obrigatória | Descrição |
+|---|---|---|
+| `PONTO_BOT_TOKEN` | sim | Token do bot |
+| `PONTO_GUILD_ID` | recomendada | ID do servidor: os comandos aparecem na hora. Sem ela, a sincronização global pode levar até 1h |
+| `PONTO_LEMBRETE_HORAS` | não | Horas de ponto aberto até o lembrete por DM (padrão `8`; `0` desliga) |
+| `PONTO_DB` | não | Caminho do banco SQLite (padrão `data/ponto.db`; no Docker, `/data/ponto.db`) |
+
+---
+
+## Setup dos feeds (GitHub Actions)
 
 1. Crie um webhook para cada canal no Discord: **Configurações do canal → Integrações → Webhooks → Novo webhook → Copiar URL**.
 2. No repositório: **Settings → Secrets and variables → Actions → New repository secret**, um para cada:

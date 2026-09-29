@@ -1,0 +1,11 @@
+services:
+  ponto:
+    build: .
+    container_name: ponto-bot
+    restart: unless-stopped
+    env_file: .env          # PONTO_BOT_TOKEN, PONTO_GUILD_ID, PONTO_LEMBRETE_HORAS
+    volumes:
+      - ponto-data:/data    # banco SQLite (ponto.db)
+
+volumes:
+  ponto-data:

@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: sebrae-missoes
+  group: feeds
   cancel-in-progress: false
 
 jobs:
@@ -25,23 +25,20 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - name: Missões Sebrae/SE
+      - name: Testes
+        run: python -m unittest
+
+      # Roda todas as integrações; se uma falhar, as outras rodam mesmo assim e o passo sai com erro.
+      - name: Publicar no Discord
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: python sebrae_missoes.py
-
-      - name: Compilado do Código Fonte TV
-        if: success() || failure()   # roda mesmo se as missões falharem
-        env:
           DISCORD_WEBHOOK_COMPILADO_URL: ${{ secrets.DISCORD_WEBHOOK_COMPILADO_URL }}
-        run: python compilado.py
+        run: python -m feeds all
 
       - name: Salvar estado
         if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          for f in posted.json posted_compilado.json; do
-            if [ -f "$f" ]; then git add "$f"; fi
-          done
+          git add state/
           git diff --cached --quiet || (git commit -m "Atualiza itens postados" && git push)

@@ -221,7 +221,7 @@ As edições não saem num dia fixo da semana, e às vezes várias saem juntas. 
 
 3. Se quiser rodar na hora: **Actions → Feeds → Discord → Run workflow**.
 
-O workflow [`.github/workflows/feeds.yml`](.github/workflows/feeds.yml) roda de hora em hora (`cron: "0 * * * *"`, em UTC): instala as dependências, roda os testes, executa `python -m feeds all` e faz commit da pasta `state/`.
+O workflow [`.github/workflows/feeds.yml`](.github/workflows/feeds.yml) roda de hora em hora (`cron: "0 * * * *"`, em UTC): instala as dependências, roda os testes, executa `python -m feeds all` e faz commit da pasta `state/`. O push do estado tenta até 5 vezes (com `pull --rebase` antes de cada uma), porque, se ele não subir, a execução seguinte reenvia as mensagens. Se as 5 falharem, o job fica vermelho com um aviso; nesse caso, marque os itens como enviados antes da próxima execução.
 
 O GitHub pode atrasar execuções agendadas em alguns minutos e desativa o cron em repositórios sem atividade por 60 dias; nesse caso é só reativar na aba Actions.
 

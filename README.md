@@ -1,6 +1,6 @@
 # Missões Sebrae/SE → Discord
 
-Busca missões empresariais na [Agência Sebrae de Notícias (SE)](https://se.agenciasebrae.com.br/) pelo RSS da busca do site (`?s=missão&feed=rss2`), filtra pelo título e posta cada uma como card num canal do Discord via webhook.
+Busca missões empresariais no RSS da [Agência Sebrae de Notícias (SE)](https://se.agenciasebrae.com.br/feed/) (filtrando pelo título), lê a página da notícia e o edital em PDF e posta no Discord um card com: evento/tipo, local, data, valor para o participante e prazo de inscrição.
 
 Roda de hora em hora no GitHub Actions (`.github/workflows/missoes.yml`). O arquivo `posted.json` guarda o que já foi postado e é commitado pelo próprio workflow.
 
@@ -16,11 +16,23 @@ Roda de hora em hora no GitHub Actions (`.github/workflows/missoes.yml`). O arqu
 Copie `.env.example` para `.env` e preencha `DISCORD_WEBHOOK_URL` (o `.env` não vai pro git). No Actions o valor vem do secret.
 
 ```bash
+pip install -r requirements.txt
+```
+
+Só mostrar no terminal o que seria postado:
+
+```bash
 python sebrae_missoes.py --dry-run
+```
+
+Testar postando as 3 mais recentes (ignora e não altera o `posted.json`):
+
+```bash
+python sebrae_missoes.py --test 3
 ```
 
 ```bash
 python sebrae_missoes.py
 ```
 
-Sem dependências externas, só a biblioteca padrão do Python 3.9+.
+Requer Python 3.9+ e `pypdf` (para ler os editais).

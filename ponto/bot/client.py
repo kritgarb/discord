@@ -14,6 +14,10 @@ from ponto.timeutil import format_duration, format_moment
 log = logging.getLogger("ponto")
 
 
+class SetupError(RuntimeError):
+    """Falha de configuração detectada ao iniciar (ex.: bot fora do servidor); a mensagem diz o que fazer."""
+
+
 class PontoBot(commands.Bot):
     def __init__(self, settings: Settings, clock: TimeClock):
         # Só slash commands: nenhum intent privilegiado (conteúdo de mensagens, membros) é necessário.
@@ -28,12 +32,22 @@ class PontoBot(commands.Bot):
         await self.add_cog(FreelaCog(self))
         await self.add_cog(AdminCog(self))
 
-        if self.settings.guild_id:
-            guild = discord.Object(id=self.settings.guild_id)
-            self.tree.copy_global_to(guild=guild)
-            synced = await self.tree.sync(guild=guild)
-        else:
-            synced = await self.tree.sync()  # global: pode levar até 1h para aparecer
+        log.info("Registrando comandos %s...", f"no servidor {self.settings.guild_id}" if self.settings.guild_id else "globalmente")
+        try:
+            if self.settings.guild_id:
+                guild = discord.Object(id=self.settings.guild_id)
+                self.tree.copy_global_to(guild=guild)
+                synced = await self.tree.sync(guild=guild)
+            else:
+                synced = await self.tree.sync()  # global: pode levar até 1h para aparecer
+        except discord.Forbidden as e:
+            raise SetupError(
+                f"O Discord recusou registrar os comandos no servidor {self.settings.guild_id} ({e.text}). "
+                "Confira se: (1) o bot foi adicionado a esse servidor com o escopo applications.commands "
+                f"(link: https://discord.com/oauth2/authorize?client_id={self.application_id or '<ID_DA_APLICACAO>'}"
+                "&scope=bot+applications.commands&permissions=0); "
+                "(2) PONTO_GUILD_ID é o ID do servidor (não de um canal ou usuário)."
+            ) from e
         log.info("%d comandos sincronizados", len(synced))
 
         if self.settings.remind_after_hours > 0:

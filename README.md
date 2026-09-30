@@ -53,7 +53,7 @@ No `all`, se uma integração falhar, as outras rodam mesmo assim e o comando te
 ### Testes
 
 ```bash
-python -m unittest -v
+python -m unittest discover -s tests -t . -v
 ```
 
 Os testes não acessam a rede: cobrem o fluxo da classe base (deduplicação, primeira execução, `--test`, `--dry-run`) e a extração de campos com textos reais dos sites. No Actions, os testes rodam antes da publicação; se falharem, nada é enviado.

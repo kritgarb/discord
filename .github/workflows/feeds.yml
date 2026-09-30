@@ -26,7 +26,7 @@ jobs:
       - run: pip install -r requirements.txt
 
       - name: Testes
-        run: python -m unittest
+        run: python -m unittest discover -s tests -t .   # só tests/: não importa ponto.bot (discord.py não é instalado aqui)
 
       # Roda todas as integrações; se uma falhar, as outras rodam mesmo assim e o passo sai com erro.
       - name: Publicar no Discord

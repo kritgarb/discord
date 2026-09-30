@@ -9,8 +9,7 @@ import sys
 import discord
 
 from feeds.core.config import ConfigError, load_dotenv
-from ponto.bot import PontoBot
-from ponto.bot.client import SetupError
+from ponto.bot.client import PontoBot, SetupError
 from ponto.config import ROOT, Settings
 from ponto.repository import SQLiteRepository
 from ponto.service import TimeClock
